@@ -28,7 +28,7 @@ def _discover_keys() -> Dict[str, str]:
     try:
         import streamlit as st
         for k, v in st.secrets.items():
-            if isinstance(v, str) and k not in os.environ:
+            if isinstance(v, str) and v.strip():
                 os.environ[k] = v
     except Exception:
         pass
@@ -186,7 +186,7 @@ def _try_groq(api_key: str, system_prompt: str, user_query: str, steps: list) ->
                         {"role": "user", "content": user_query},
                     ],
                     "temperature": 0.25,
-                    "max_tokens": 450,
+                    "max_tokens": 900,
                 },
                 timeout=12,
             )
@@ -215,7 +215,7 @@ def _try_openai(api_key: str, system_prompt: str, user_query: str, steps: list) 
                         {"role": "user", "content": user_query},
                     ],
                     "temperature": 0.25,
-                    "max_tokens": 450,
+                    "max_tokens": 900,
                 },
                 timeout=12,
             )
@@ -236,7 +236,7 @@ def _try_gemini(api_key: str, system_prompt: str, user_query: str, steps: list) 
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
             payload = {
                 "contents": [{"parts": [{"text": f"{system_prompt}\n\nUser Request: {user_query}"}]}],
-                "generationConfig": {"temperature": 0.25, "maxOutputTokens": 450},
+                "generationConfig": {"temperature": 0.25, "maxOutputTokens": 900},
             }
             resp = requests.post(url, json=payload, timeout=12)
             if resp.status_code == 200:
