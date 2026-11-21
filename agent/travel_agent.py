@@ -186,50 +186,63 @@ def _gather_local_dataset_context(user_query: str) -> tuple[str, List[Dict[str, 
 
 
 def _try_groq(api_key: str, system_prompt: str, user_query: str, steps: list) -> Dict[str, Any]:
-    """Tries current Groq production models and dynamically queries /v1/models if needed."""
+    """Tries fast chat models first, configures low reasoning effort for gpt-oss, and rejects empty content."""
     candidate_models = [
-        "openai/gpt-oss-20b",
-        "openai/gpt-oss-120b",
-        "meta-llama/llama-4-scout-17b-16e-instruct",
-        "qwen/qwen3.8-27b",
         "llama-3.3-70b-versatile",
         "llama-3.1-8b-instant",
+        "meta-llama/llama-4-scout-17b-16e-instruct",
+        "openai/gpt-oss-20b",
+        "openai/gpt-oss-120b",
     ]
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
 
-    # Fetch live model list from Groq account to append any newly enabled chat models
     try:
         m_resp = requests.get("https://api.groq.com/openai/v1/models", headers=headers, timeout=5)
         if m_resp.status_code == 200:
             for item in m_resp.json().get("data", []):
                 mid = item.get("id", "")
-                if mid and not any(x in mid.lower() for x in ["whisper", "guard", "orpheus", "tts", "embed"]):
+                if mid and not any(x in mid.lower() for x in ["whisper", "guard", "orpheus", "tts", "embed", "safeguard"]):
                     if mid not in candidate_models:
                         candidate_models.append(mid)
     except Exception:
         pass
 
-    last_err = "Groq call failed"
+    last_err = "Groq returned empty output"
     for model in candidate_models:
         try:
+            payload = {
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_query},
+                ],
+                "temperature": 0.3,
+                "max_completion_tokens": 2048,
+            }
+            if "gpt-oss" in model.lower():
+                payload["reasoning_effort"] = "low"
+
             resp = requests.post(
                 "https://api.groq.com/openai/v1/chat/completions",
                 headers=headers,
-                json={
-                    "model": model,
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_query},
-                    ],
-                    "temperature": 0.25,
-                    "max_tokens": 900,
-                },
-                timeout=12,
+                json=payload,
+                timeout=15,
             )
             if resp.status_code == 200:
-                text = resp.json()["choices"][0]["message"]["content"]
-                return {"success": True, "provider": "Groq", "model": model, "output": text, "intermediate_steps": steps, "error": None}
-            last_err = f"{resp.status_code}: {resp.text[:200]}"
+                msg = resp.json()["choices"][0]["message"]
+                text = (msg.get("content") or "").strip()
+                if len(text) > 15:
+                    return {
+                        "success": True,
+                        "provider": "Groq",
+                        "model": model,
+                        "output": text,
+                        "intermediate_steps": steps,
+                        "error": None,
+                    }
+                last_err = f"{model} returned empty content (reasoning budget exhausted)"
+            else:
+                last_err = f"{resp.status_code}: {resp.text[:200]}"
         except Exception as e:
             last_err = str(e)
     raise RuntimeError(last_err)
