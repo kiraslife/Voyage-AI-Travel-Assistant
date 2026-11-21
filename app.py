@@ -309,6 +309,46 @@ init_session_state()
 # ---------------------------------------------------------------------------
 # 3. HELPER: RUN AI QUERY SAFELY
 # ---------------------------------------------------------------------------
+def _sync_ai_recommendation_to_trip(trip: Dict[str, Any], ai_text: str) -> Dict[str, Any]:
+    """Syncs AI recommendations directly into Overview cards (summary, insight, schedule, hotel)."""
+    import re
+    clean_lines = []
+    for line in ai_text.splitlines():
+        s = re.sub(r"[#*`_>]+", "", line).strip()
+        if s and not s.startswith("|") and not set(s) <= {"-", ":", " "}:
+            clean_lines.append(s)
+
+    plain_summary = " ".join(clean_lines[:3])
+    trip["full_itinerary"] = ai_text
+    trip["ai_insight"] = (plain_summary[:260] + "...") if len(plain_summary) > 260 else plain_summary
+    trip["summary"] = (plain_summary[:210] + "...") if len(plain_summary) > 210 else plain_summary
+
+    # Populate Arrival & Schedule card with AI-recommended activities
+    ai_schedule = []
+    for line in clean_lines:
+        if any(k in line.lower() for k in ["day 1", "day 2", "day 3", "morning", "afternoon", "evening", "sunset"]):
+            time_match = re.search(r"(\d{1,2}:\d{2}\s*(?:AM|PM|am|pm)?(?:\s*[-–]\s*\d{1,2}:\d{2}\s*(?:AM|PM|am|pm)?)?)", line)
+            slot = time_match.group(1) if time_match else f"AI Pick #{len(ai_schedule) + 1}"
+            act = re.sub(r"^\s*[-•\d.)]+\s*", "", line).strip()
+            if len(act) > 8:
+                ai_schedule.append({"activity": act[:58], "time": slot})
+        if len(ai_schedule) >= 3:
+            break
+
+    if ai_schedule:
+        trip["schedule"] = ai_schedule
+
+    # Match recommended hotel from dataset if mentioned by the AI
+    ai_lower = ai_text.lower()
+    for h in load_json_dataset("hotels.json"):
+        h_name = str(h.get("name", h.get("hotel_name", ""))).strip()
+        if h_name and len(h_name) > 3 and h_name.lower() in ai_lower:
+            trip["hotel"] = h
+            break
+
+    return trip
+
+
 def execute_user_travel_query(query_text: str, target_trip_context: Optional[Dict[str, Any]] = None) -> None:
     """Calls generate_itinerary(user_query) with state preservation and tool step logging."""
     if not query_text.strip():
@@ -339,9 +379,7 @@ def execute_user_travel_query(query_text: str, target_trip_context: Optional[Dic
             "content": res["output"],
         })
 
-        base_trip["full_itinerary"] = str(res["output"])
-        base_trip["ai_insight"] = str(res["output"])[:280]
-        base_trip["summary"] = str(res["output"])[:240]
+        base_trip = _sync_ai_recommendation_to_trip(base_trip, str(res["output"]))
         st.session_state.current_trip = base_trip
         st.session_state.saved_plans[f"{base_trip['destination']} Trip"] = base_trip
     else:
@@ -549,9 +587,6 @@ if st.session_state.active_nav == "Overview":
                     f"<div style='font-size:11px; color:{color}; margin-top:4px;'><strong>{role_lbl}:</strong> {m['content'][:260]}</div>",
                     unsafe_allow_html=True,
                 )
-        if trip.get("full_itinerary"):
-            with st.expander("📄 View Full AI Generated Itinerary"):
-                st.markdown(trip["full_itinerary"])
         st.markdown("</div>", unsafe_allow_html=True)
 
     with col_right:
@@ -562,6 +597,19 @@ if st.session_state.active_nav == "Overview":
 
         render_ai_insight_card(trip, st.session_state.agent_meta)
         render_packing_checklist(st.session_state.packing_state)
+
+    # LIVE AI RECOMMENDATIONS PANEL DIRECTLY ON OVERVIEW
+    if trip.get("full_itinerary"):
+        m = st.session_state.agent_meta
+        st.markdown(
+            f'<div style="display:flex; justify-content:space-between; align-items:center; margin:10px 0 6px 0;">'
+            f'<span style="font-size:14px; font-weight:700; color:#F5F5F5;">✨ Live AI Recommendations — {trip["source"]} → {dest_name} ({trip["days"]} Days)</span>'
+            f'<span style="font-size:11px; color:#34D399; background:#17191F; border:1px solid #30343D; padding:2px 10px; border-radius:999px;">🤖 {m.get("provider", "Groq")} • {m.get("model", "")}</span>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+        with st.container(height=280, border=True):
+            st.markdown(trip["full_itinerary"])
 
 
 # ---------------------------------------------------------------------------
