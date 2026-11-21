@@ -1,3 +1,4 @@
+import re
 # agent/travel_agent.py
 import os
 import json
@@ -121,31 +122,66 @@ def get_available_providers() -> Dict[str, Dict[str, Any]]:
 def _gather_local_dataset_context(user_query: str) -> tuple[str, List[Dict[str, Any]]]:
     steps: List[Dict[str, Any]] = []
     q_lower = user_query.lower()
-    cities = ["goa", "delhi", "jaipur", "mumbai", "bangalore", "kolkata", "hyderabad", "chennai"]
-    matched = [c.title() for c in cities if c in q_lower]
-    dest = matched[-1] if matched else "Goa"
-    src = matched[0] if len(matched) > 1 else "Delhi"
+    cities = ["goa", "delhi", "jaipur", "mumbai", "bangalore", "kolkata", "hyderabad", "chennai", "udaipur", "manali", "kerala"]
+
+    # 1. Explicitly check "from <src> to <dest>" or "<src> to <dest>" first
+    city_pat = "|".join(cities)
+    m = re.search(rf"(?:from\s+)?({city_pat})\s+(?:to|->|→)\s+({city_pat})", q_lower)
+    if m:
+        src, dest = m.group(1).title(), m.group(2).title()
+    else:
+        # 2. Otherwise sort matched cities by actual appearance order in the prompt
+        found = sorted([(q_lower.find(c), c.title()) for c in cities if c in q_lower])
+        if len(found) >= 2:
+            src, dest = found[0][1], found[-1][1]
+        elif len(found) == 1:
+            src, dest = "Delhi", found[0][1]
+        else:
+            src, dest = "Delhi", "Goa"
 
     def _read_json(fname: str) -> list:
-        path = os.path.join("data", fname)
-        if os.path.exists(path):
+        fpath = os.path.join("data", fname)
+        if os.path.exists(fpath):
             try:
-                with open(path, "r", encoding="utf-8") as f:
+                with open(fpath, "r", encoding="utf-8") as f:
                     d = json.load(f)
                     return d if isinstance(d, list) else []
             except Exception:
                 return []
         return []
 
-    flights = [f for f in _read_json("flights.json") if str(f.get("to", f.get("destination", ""))).lower() == dest.lower()][:3]
-    hotels = [h for h in _read_json("hotels.json") if str(h.get("city", h.get("location", ""))).lower() == dest.lower()][:3]
-    places = [p for p in _read_json("places.json") if str(p.get("city", p.get("location", ""))).lower() == dest.lower()][:5]
+    all_flights = _read_json("flights.json")
+    exact_flights = [
+        f for f in all_flights
+        if str(f.get("from", f.get("source", ""))).lower() == src.lower()
+        and str(f.get("to", f.get("destination", ""))).lower() == dest.lower()
+    ]
+    to_flights = [
+        f for f in all_flights
+        if str(f.get("to", f.get("destination", ""))).lower() == dest.lower()
+    ]
+    flights = (exact_flights or to_flights)[:3]
+
+    hotels = [
+        h for h in _read_json("hotels.json")
+        if str(h.get("city", h.get("location", ""))).lower() == dest.lower()
+    ][:3]
+    places = [
+        p for p in _read_json("places.json")
+        if str(p.get("city", p.get("location", ""))).lower() == dest.lower()
+    ][:5]
 
     steps.append({"order": 1, "tool": "search_flights", "tool_input": {"source": src, "destination": dest}, "status": "Success", "observation": flights})
     steps.append({"order": 2, "tool": "search_hotels", "tool_input": {"city": dest}, "status": "Success", "observation": hotels})
     steps.append({"order": 3, "tool": "discover_places", "tool_input": {"city": dest}, "status": "Success", "observation": places})
 
-    ctx = f"Dataset Context ({src} -> {dest}): Flights={json.dumps(flights)} | Hotels={json.dumps(hotels)} | Places={json.dumps(places)}"
+    ctx = (
+        f"Requested Route: {src} -> {dest}\n"
+        f"Verified Local Dataset for {dest}:\n"
+        f"- Flights: {json.dumps(flights)}\n"
+        f"- Hotels: {json.dumps(hotels)}\n"
+        f"- Attractions: {json.dumps(places)}"
+    )
     return ctx, steps
 
 
@@ -261,7 +297,7 @@ def generate_itinerary(
     context_str, steps = _gather_local_dataset_context(user_query)
     system_prompt = (
         "You are Voyage AI, an autonomous travel planning assistant. "
-        "Use the verified dataset records below to answer the user's request concisely (3-5 sentences) "
+        "Always build a complete, practical day-by-day itinerary for the Requested Route using the verified dataset hotels, flights, and attractions below. If a specific flight route or dining spot is missing from the JSON snippet, use the closest dataset options and supplement with realistic local recommendations—never refuse the request. "
         "with concrete times, real hotel/attraction names from the dataset, and budget advice.\n\n"
         + context_str
     )
