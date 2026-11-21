@@ -1,0 +1,7 @@
+.env
+venv/
+.backup_voyage_ai/
+.vscode/
+__pycache__/
+*.pyc
+.DS_Store
