@@ -350,6 +350,14 @@ def _sync_ai_recommendation_to_trip(trip: Dict[str, Any], ai_text: str) -> Dict[
     return trip
 
 
+def _as_coord_dict(val: Any) -> Optional[Dict[str, float]]:
+    if isinstance(val, dict) and "lat" in val and "lon" in val:
+        return {"lat": float(val["lat"]), "lon": float(val["lon"])}
+    if isinstance(val, (tuple, list)) and len(val) >= 2:
+        return {"lat": float(val[0]), "lon": float(val[1])}
+    return None
+
+
 def _update_budget_dict(target: Any, f_val: int, h_val: int, food_val: int, t_val: int, tot_val: int) -> Any:
     if not isinstance(target, dict):
         return target
@@ -419,7 +427,7 @@ def run_dynamic_ai_search(search_query: str, target_trip_context: Optional[Dict[
     trip["summary"] = dyn.get("summary") or trip.get("summary", "")
     trip["ai_insight"] = dyn.get("ai_insight") or dyn.get("summary", "")
     trip["full_itinerary"] = dyn.get("full_itinerary", "")
-    trip["coords"] = (dyn["lat"], dyn["lon"])
+    trip["coords"] = {"lat": float(dyn["lat"]), "lon": float(dyn["lon"])}
     trip["places"] = dyn.get("attractions") or []
     trip["day_plans"] = dyn.get("day_plans") or []
 
@@ -474,7 +482,7 @@ def run_dynamic_ai_search(search_query: str, target_trip_context: Optional[Dict[
 
     # Sync global CITY_COORDS and refresh live 5-day Open-Meteo weather
     if "CITY_COORDS" in globals() and isinstance(globals()["CITY_COORDS"], dict):
-        globals()["CITY_COORDS"][dest] = (dyn["lat"], dyn["lon"])
+        globals()["CITY_COORDS"][dest] = {"lat": float(dyn["lat"]), "lon": float(dyn["lon"])}
     try:
         fresh_w = fetch_open_meteo_forecast(dyn["lat"], dyn["lon"])
         if isinstance(st.session_state.get("weather_cache"), dict):
@@ -671,7 +679,7 @@ render_error_banner(st.session_state.last_error)
 if st.session_state.active_nav == "Overview":
     _ct = st.session_state.get("current_trip") or {}
     if _ct.get("coords") and "CITY_COORDS" in globals():
-        globals()["CITY_COORDS"][_ct.get("destination", "")] = tuple(_ct["coords"])
+        globals()["CITY_COORDS"][_ct.get("destination", "")] = _as_coord_dict(_ct["coords"]) or {"lat": 22.5726, "lon": 88.3639}
     trip = st.session_state.current_trip
     dest_name = trip.get("destination", "Goa")
     coords = trip.get("coordinates") or CITY_COORDINATES.get(dest_name)
@@ -705,7 +713,7 @@ if st.session_state.active_nav == "Overview":
         with up_left:
             render_arrival_schedule_card(trip)
         with up_right:
-            coords = tuple(trip["coords"]) if trip.get("coords") else coords
+            coords = _as_coord_dict(trip.get("coords")) or _as_coord_dict(coords) or {"lat": 22.5726, "lon": 88.3639}
             render_map_card(dest_name, coords, trip.get("places", []))
 
         render_hotel_card(trip.get("hotel"), dest_name)
@@ -763,6 +771,7 @@ if st.session_state.active_nav == "Overview":
         st.markdown("</div>", unsafe_allow_html=True)
 
     with col_right:
+        coords = _as_coord_dict(coords)
         weather_list = fetch_open_meteo_forecast(coords["lat"], coords["lon"]) if coords else []
         if render_weather_card(weather_list, dest_name):
             fetch_open_meteo_forecast.clear()
