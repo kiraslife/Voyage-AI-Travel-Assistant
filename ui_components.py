@@ -1,3 +1,4 @@
+from urllib.parse import quote_plus
 # ui_components.py
 import re
 import html
@@ -476,66 +477,73 @@ def render_map_card(
 
 
 def render_featured_trip_card(trip: Dict[str, Any]) -> None:
-    """Renders the Left-Upper Featured Trip Card."""
-    dest = html.escape(str(trip.get("destination", "Goa")))
-    source = html.escape(str(trip.get("source", "Delhi")))
-    title = html.escape(str(trip.get("title", f"{dest} Signature Trip 2026")))
-    dates = html.escape(str(trip.get("dates", "21 Nov – 25 Nov 2026")))
-    days = int(trip.get("days", 4))
-    travelers = int(trip.get("travelers", 2))
-    status = html.escape(str(trip.get("status", "On Track")))
-    summary = html.escape(str(trip.get("summary", "")))
-    image_url = html.escape(str(trip.get("image_url", "https://images.unsplash.com/photo-1512343879784-a960bf40e7f2?auto=format&fit=crop&w=900&q=80")))
+    """Featured trip card with destination-themed hero image and clickable Google Flights redirect."""
+    import html as _hl
+    src = str(trip.get("source", "Delhi"))
+    dest = str(trip.get("destination", "Goa"))
+    days = trip.get("days", 4)
+    travelers = trip.get("travelers", 2)
+    title = _hl.escape(str(trip.get("title", f"{dest} Signature Trip 2026")))
+    dates = _hl.escape(str(trip.get("dates", f"{days}-Day Plan")))
+    summary = _hl.escape(str(trip.get("summary", "")))
 
-    flight = trip.get("flight") or {}
-    flight_str = (
-        f"{flight.get('airline', 'IndiGo')} ({flight.get('flight_no', flight.get('flight_id', '6E-204'))}) • ₹{int(float(flight.get('price', 5400))):,}"
-        if flight else "Flight selection available in dataset"
+    hero_img = (
+        trip.get("hero_image")
+        or trip.get("image_url")
+        or trip.get("image")
+        or "https://images.unsplash.com/photo-1512343879784-a960bf40e7f2?auto=format&fit=crop&w=1200&q=80"
     )
 
-    _html(
-        f"""
-        <div class="v-card">
-            <div class="v-featured-img-wrap">
-                <img src="{image_url}" alt="{dest}"/>
-                <div class="v-img-counter">1 / {max(len(trip.get('places', [])), 4)}</div>
-                <div class="v-route-badge">✈️ {source} → {dest}</div>
-            </div>
-            <div style="display:flex; justify-content:space-between; align-items:baseline;">
-                <div style="font-size:17px; font-weight:700; color:#F5F5F5; letter-spacing:-0.01em;">
-                    {title}
-                </div>
-                <div style="font-size:11px; color:#9298A4;">{dates}</div>
-            </div>
-            <div style="font-size:12px; color:#9298A4; margin-top:6px; line-height:1.45; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;">
-                {summary}
-            </div>
-            <div style="margin-top:8px; background:#20232B; border:1px solid #30343D; border-radius:8px; padding:5px 9px; font-size:11px; color:#35BDF4;">
-                🛫 <strong>Recommended Flight:</strong> {html.escape(flight_str)}
-            </div>
-            <div class="v-meta-row">
-                <span>🕒 {days} Days</span>
-                <span>•</span>
-                <span>👥 {travelers} Travelers</span>
-                <span>•</span>
-                <span class="v-status-dot">● {status}</span>
-            </div>
-        </div>
-        """
+    fl = trip.get("flight") or {}
+    airline = str(fl.get("airline", "IndiGo"))
+    flight_id = str(fl.get("flight_id", "6E-204"))
+    fl_price = fl.get("price", 5200)
+    try:
+        fl_price_fmt = f"₹{int(float(fl_price)):,}"
+    except Exception:
+        fl_price_fmt = f"₹{fl_price}"
+
+    flight_query = quote_plus(f"Flights from {src} to {dest} {airline}")
+    flight_url = f"https://www.google.com/travel/flights?q={flight_query}"
+    dest_map_url = f"https://www.google.com/maps/search/?api=1&query={quote_plus(dest)}"
+
+    card_html = (
+        '<div class="bento-card" style="padding:0; overflow:hidden; margin-bottom:10px;">'
+        f'<div style="position:relative; height:168px; background-image:url({hero_img}); background-position:center; background-size:cover; background-repeat:no-repeat;">'
+        '<div style="position:absolute; inset:0; background:linear-gradient(to top, rgba(15,17,23,0.85) 5%, rgba(15,17,23,0.10) 65%);"></div>'
+        f'<a href="{dest_map_url}" target="_blank" rel="noopener noreferrer" style="position:absolute; top:10px; right:10px; text-decoration:none; font-size:11px; font-weight:600; color:#E0F2FE; background:rgba(15,23,42,0.82); border:1px solid rgba(56,189,248,0.45); padding:4px 10px; border-radius:999px;">✈ {_hl.escape(src)} → {_hl.escape(dest)} ↗</a>'
+        '</div>'
+        '<div style="padding:14px 16px;">'
+        '<div style="display:flex; justify-content:space-between; align-items:baseline; gap:8px; margin-bottom:6px;">'
+        f'<div style="font-size:17px; font-weight:700; color:#F9FAFB;">{title}</div>'
+        f'<div style="font-size:11px; color:#9CA3AF; white-space:nowrap;">{dates}</div>'
+        '</div>'
+        f'<div style="font-size:12px; color:#9CA3AF; line-height:1.45; margin-bottom:10px;">{summary}</div>'
+        f'<a href="{flight_url}" target="_blank" rel="noopener noreferrer" style="display:inline-flex; align-items:center; gap:6px; text-decoration:none; font-size:12px; font-weight:600; color:#60A5FA; background:rgba(37,99,235,0.12); border:1px solid rgba(96,165,250,0.35); padding:5px 10px; border-radius:8px; margin-bottom:10px;">'
+        f'✈ Recommended Flight: {_hl.escape(airline)} ({_hl.escape(flight_id)}) • {fl_price_fmt} ↗'
+        '</a>'
+        '<div style="display:flex; align-items:center; gap:12px; font-size:11.5px; color:#D1D5DB; padding-top:8px; border-top:1px solid #262A36;">'
+        f'<span>● {_hl.escape(str(days))} Days</span>'
+        f'<span>👥 {_hl.escape(str(travelers))} Travelers</span>'
+        '<span style="color:#34D399;">● On Track</span>'
+        '</div>'
+        '</div>'
+        '</div>'
     )
+    _html(card_html)
 
 
 def render_arrival_schedule_card(trip: Dict[str, Any]) -> None:
-    """Interactive day-by-day schedule card with Day tabs and scrollable timeline."""
+    """Interactive day-by-day schedule card with clickable Google Maps redirect per activity."""
     import html as _hl
     days_count = max(1, int(trip.get("days", 3) or 3))
+    dest_name = str(trip.get("destination", "City"))
     day_plans = trip.get("day_plans") or []
 
     if not day_plans:
         base_sched = trip.get("schedule") or []
         places = trip.get("places") or []
         hotel_name = (trip.get("hotel") or {}).get("name", "Local Hotel")
-        dest_fallback = trip.get("destination", "City")
         for d in range(1, days_count + 1):
             items = []
             if d == 1:
@@ -544,9 +552,9 @@ def render_arrival_schedule_card(trip: Dict[str, Any]) -> None:
                     items.append({"time": s.get("time", "02:00 PM"), "activity": s.get("activity", "City Walk"), "category": "Sightseeing", "note": "Curated stop"})
             else:
                 p_idx = (d - 2) % max(1, len(places))
-                p_name = places[p_idx].get("name", f"Explore {dest_fallback}") if places else f"Explore {dest_fallback}"
+                p_name = places[p_idx].get("name", f"Explore {dest_name}") if places else f"Explore {dest_name}"
                 items.append({"time": "09:30 AM", "activity": f"Visit {p_name}", "category": "Sightseeing", "note": "Beat the midday crowd"})
-                items.append({"time": "01:30 PM", "activity": f"Local Cuisine Lunch in {dest_fallback}", "category": "Food", "note": "Signature regional dishes"})
+                items.append({"time": "01:30 PM", "activity": f"Local Cuisine Lunch in {dest_name}", "category": "Food", "note": "Signature regional dishes"})
                 items.append({"time": "05:30 PM", "activity": "Evening Market & Sunset Walk", "category": "Leisure", "note": "Golden hour photos"})
             day_plans.append({"day": d, "theme": f"Day {d} Highlights", "items": items})
 
@@ -555,7 +563,7 @@ def render_arrival_schedule_card(trip: Dict[str, Any]) -> None:
         '<div class="bento-card" style="padding:12px 14px 6px 14px; margin-bottom:6px;">'
         '<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">'
         '<span style="font-size:12px; font-weight:700; color:#F5F5F5;">📅 Day-by-Day Schedule</span>'
-        f'<span style="font-size:10px; color:#60A5FA; background:#1E293B; padding:2px 8px; border-radius:999px;">{len(day_plans)} Days • Scrollable</span>'
+        f'<span style="font-size:10px; color:#60A5FA; background:#1E293B; padding:2px 8px; border-radius:999px;">{len(day_plans)} Days • Click to Map</span>'
         '</div>'
         f'<div style="font-size:11px; color:#9CA3AF;">{dates_txt}</div>'
         '</div>'
@@ -569,18 +577,22 @@ def render_arrival_schedule_card(trip: Dict[str, Any]) -> None:
         cat = str(item.get("category", "Sightseeing"))
         accent = cat_colors.get(cat, "#38BDF8")
         t_str = _hl.escape(str(item.get("time", "")))
-        act = _hl.escape(str(item.get("activity", "")))
+        raw_act = str(item.get("activity", ""))
+        act = _hl.escape(raw_act)
         note = _hl.escape(str(item.get("note", "")))
+        map_url = f"https://www.google.com/maps/search/?api=1&query={quote_plus(f'{raw_act} {dest_name}')}"
         note_html = f'<div style="font-size:10.5px; color:#9CA3AF; margin-top:2px;">{note}</div>' if note else ""
         slot_html = (
+            f'<a href="{map_url}" target="_blank" rel="noopener noreferrer" style="text-decoration:none; display:block;">'
             f'<div style="background:#171A23; border:1px solid #262A36; border-left:3px solid {accent}; '
-            'border-radius:8px; padding:7px 10px; margin-bottom:6px;">'
+            'border-radius:8px; padding:7px 10px; margin-bottom:6px; cursor:pointer;">'
             '<div style="display:flex; justify-content:space-between; align-items:center; gap:6px;">'
-            f'<span style="font-size:12px; font-weight:600; color:#F3F4F6;">{act}</span>'
+            f'<span style="font-size:12px; font-weight:600; color:#F3F4F6;">{act} ↗</span>'
             f'<span style="font-size:10px; color:{accent}; white-space:nowrap;">{t_str}</span>'
             '</div>'
             f'{note_html}'
             '</div>'
+            '</a>'
         )
         _html(slot_html)
 
@@ -647,53 +659,46 @@ def render_weather_card(weather_data: List[Dict[str, Any]], destination: str) ->
 
 
 def render_hotel_card(hotel: Optional[Dict[str, Any]], destination: str) -> bool:
-    """Renders the Center-Middle Recommended Hotel Card."""
-    if not hotel:
-        _html(
-            f"""
-            <div class="v-card" style="height:168px; display:flex; align-items:center; justify-content:center; color:#9298A4; font-size:12px;">
-                No matching hotel found in dataset for {html.escape(destination)} within selected filters.
-            </div>
-            """
-        )
-        return False
+    """Recommended Hotel card with direct redirect buttons to Google Hotels and Google Maps."""
+    import html as _hl
+    h = hotel or {}
+    name = str(h.get("name") or h.get("hotel_name") or f"{destination} Grand Stay")
+    area = str(h.get("location") or h.get("area") or destination)
+    price = h.get("price_per_night") or h.get("price") or 4200
+    rating = h.get("rating") or h.get("stars") or 4.5
+    try:
+        price_fmt = f"₹{int(float(price)):,}/night"
+    except Exception:
+        price_fmt = f"₹{price}/night"
 
-    name = html.escape(str(hotel.get("name", hotel.get("hotel_name", "Recommended Resort & Spa"))))
-    rating = html.escape(str(hotel.get("rating", hotel.get("stars", "4.7"))))
-    location = html.escape(str(hotel.get("location", hotel.get("city", destination))))
-    price = int(float(hotel.get("price_per_night", hotel.get("price", 4200))))
-    desc = html.escape(str(hotel.get("description", "Curated stay selected from verified local hospitality dataset.")))
-    img = html.escape(str(hotel.get("image_url", "https://images.unsplash.com/photo-1566073771259-6a8506099945?auto=format&fit=crop&w=700&q=80")))
-
-    _html(
-        f"""
-        <div class="v-card" style="height:168px;">
-            <div class="v-hotel-grid">
-                <div>
-                    <img class="v-hotel-img" src="{img}" alt="{name}"/>
-                </div>
-                <div>
-                    <div style="display:flex; justify-content:space-between; align-items:center;">
-                        <span style="font-size:10.5px; color:#35BDF4; font-weight:600; text-transform:uppercase;">Recommended Hotel</span>
-                        <span style="font-size:11px; color:#FBBF24; font-weight:600;">★ {rating}</span>
-                    </div>
-                    <div style="font-size:14.5px; font-weight:700; color:#F5F5F5; margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
-                        {name}
-                    </div>
-                    <div style="font-size:11px; color:#9298A4; margin-bottom:4px;">
-                        📍 {location} • <strong style="color:#34D399;">₹{price:,}/night</strong>
-                    </div>
-                    <div style="font-size:11px; color:#9298A4; line-height:1.35; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; margin-bottom:8px;">
-                        {desc}
-                    </div>
-                    <div style="display:inline-block; background:#20232B; border:1px solid #30343D; border-radius:999px; padding:4px 12px; font-size:11px; color:#F5F5F5;">
-                        Recommended Stay ↗
-                    </div>
-                </div>
-            </div>
-        </div>
-        """
+    hotel_img = (
+        h.get("image_url")
+        or "https://images.unsplash.com/photo-1566073771259-6a8506099945?auto=format&fit=crop&w=900&q=80"
     )
+    hotel_url = f"https://www.google.com/travel/hotels?q={quote_plus(f'{name} {destination}')}"
+    maps_url = f"https://www.google.com/maps/search/?api=1&query={quote_plus(f'{name} {destination}')}"
+
+    card_html = (
+        '<div class="bento-card" style="padding:12px; margin:8px 0; display:flex; gap:14px; align-items:stretch;">'
+        f'<a href="{hotel_url}" target="_blank" rel="noopener noreferrer" style="flex:0 0 42%; min-height:122px; border-radius:10px; overflow:hidden; display:block; background-image:url({hotel_img}); background-position:center; background-size:cover; background-repeat:no-repeat;"></a>'
+        '<div style="flex:1; display:flex; flex-direction:column; justify-content:space-between; min-width:0;">'
+        '<div>'
+        '<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">'
+        '<span style="font-size:10px; font-weight:700; letter-spacing:0.06em; color:#60A5FA;">RECOMMENDED HOTEL</span>'
+        f'<span style="font-size:11px; font-weight:700; color:#FBBF24;">★ {_hl.escape(str(rating))}</span>'
+        '</div>'
+        f'<a href="{hotel_url}" target="_blank" rel="noopener noreferrer" style="text-decoration:none; font-size:15px; font-weight:700; color:#F9FAFB; display:block; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{_hl.escape(name)}</a>'
+        f'<div style="font-size:11.5px; color:#34D399; margin:3px 0 6px 0;">📍 {_hl.escape(area)} • {price_fmt}</div>'
+        '<div style="font-size:11px; color:#9CA3AF; line-height:1.35;">Click below to view live rates, photos, reviews, and location.</div>'
+        '</div>'
+        '<div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:10px;">'
+        f'<a href="{hotel_url}" target="_blank" rel="noopener noreferrer" style="text-decoration:none; font-size:11.5px; font-weight:600; color:#F9FAFB; background:#2563EB; padding:5px 12px; border-radius:999px;">Recommended Stay ↗</a>'
+        f'<a href="{maps_url}" target="_blank" rel="noopener noreferrer" style="text-decoration:none; font-size:11.5px; font-weight:600; color:#D1D5DB; background:#1F2430; border:1px solid #303646; padding:5px 11px; border-radius:999px;">View on Map ↗</a>'
+        '</div>'
+        '</div>'
+        '</div>'
+    )
+    _html(card_html)
     return False
 
 
@@ -783,13 +788,13 @@ def render_budget_card(budget: Dict[str, Any]) -> None:
 
 
 def render_attraction_cards(places: List[Dict[str, Any]]) -> None:
-    """Scrollable real attractions gallery displaying all discovered destination landmarks."""
+    """Scrollable real attractions gallery where every card opens directly in Google Maps."""
     import html as _hl
     places = places or []
     _html(
         '<div style="display:flex; justify-content:space-between; align-items:center; margin:8px 0 6px 0;">'
         '<span style="font-size:13px; font-weight:700; color:#F5F5F5;">Top Discovered Attractions</span>'
-        f'<span style="font-size:11px; color:#9CA3AF;">{len(places)} Verified Places • Scrollable</span>'
+        f'<span style="font-size:11px; color:#9CA3AF;">{len(places)} Verified Places • Click any card ↗</span>'
         '</div>'
     )
     if not places:
@@ -803,24 +808,28 @@ def render_attraction_cards(places: List[Dict[str, Any]]) -> None:
             for c_idx, place in enumerate(row_items):
                 g_idx = row_start + c_idx
                 name = str(place.get("name", "Landmark"))
+                city = str(place.get("city", ""))
                 cat = str(place.get("category", place.get("type", "Landmark")))
                 rating = place.get("rating", 4.5)
                 desc = str(place.get("description", ""))
                 img_url = _pick_attraction_image(name, cat, g_idx)
+                map_url = f"https://www.google.com/maps/search/?api=1&query={quote_plus(f'{name} {city}'.strip())}"
                 desc_html = (
                     f'<div style="padding:6px 8px; font-size:10.5px; color:#9CA3AF; line-height:1.3; min-height:34px;">{_hl.escape(desc[:72])}</div>'
                     if desc else ""
                 )
                 card_html = (
-                    '<div style="background:#161922; border:1px solid #262A36; border-radius:12px; overflow:hidden; margin-bottom:8px;">'
+                    f'<a href="{map_url}" target="_blank" rel="noopener noreferrer" style="text-decoration:none; display:block;">'
+                    '<div style="background:#161922; border:1px solid #262A36; border-radius:12px; overflow:hidden; margin-bottom:8px; cursor:pointer;">'
                     f'<div style="position:relative; height:98px; background-image:url({img_url}); background-position:center; background-size:cover; background-repeat:no-repeat;">'
                     '<div style="position:absolute; inset:0; background:linear-gradient(to top, rgba(15,17,23,0.92) 8%, rgba(15,17,23,0.12) 70%);"></div>'
                     f'<span style="position:absolute; top:6px; left:6px; font-size:9.5px; font-weight:600; color:#E5E7EB; background:rgba(15,17,23,0.78); padding:2px 7px; border-radius:999px;">{_hl.escape(cat)}</span>'
-                    f'<span style="position:absolute; top:6px; right:6px; font-size:10px; font-weight:700; color:#FBBF24; background:rgba(15,17,23,0.78); padding:2px 6px; border-radius:999px;">★ {rating}</span>'
+                    f'<span style="position:absolute; top:6px; right:6px; font-size:10px; font-weight:700; color:#FBBF24; background:rgba(15,17,23,0.78); padding:2px 6px; border-radius:999px;">★ {rating} ↗</span>'
                     f'<div style="position:absolute; bottom:6px; left:8px; right:8px; font-size:12px; font-weight:700; color:#FFFFFF; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{_hl.escape(name)}</div>'
                     '</div>'
                     f'{desc_html}'
                     '</div>'
+                    '</a>'
                 )
                 with cols[c_idx]:
                     _html(card_html)
