@@ -408,6 +408,10 @@ def run_dynamic_ai_search(search_query: str, target_trip_context: Optional[Dict[
         trip = dict(cur)
 
     trip["title"] = dyn.get("title") or f"{dest} Signature Trip 2026"
+    if dyn.get("hero_image"):
+        trip["hero_image"] = dyn["hero_image"]
+        trip["image"] = dyn["hero_image"]
+        trip["image_url"] = dyn["hero_image"]
     trip["source"] = src
     trip["destination"] = dest
     trip["days"] = days
@@ -462,7 +466,7 @@ def run_dynamic_ai_search(search_query: str, target_trip_context: Optional[Dict[
     h_val = int(d_b.get("hotels") or (base_hotel["price_per_night"] * days))
     food_val = int(d_b.get("food") or (1400 * days * travelers))
     t_val = int(d_b.get("transport") or (900 * days))
-    tot_val = int(d_b.get("total") or (f_val + h_val + food_val + t_val))
+    tot_val = f_val + h_val + food_val + t_val
     if trip.get("budget"):
         trip["budget"] = _update_budget_dict(trip["budget"], f_val, h_val, food_val, t_val, tot_val)
     else:
@@ -491,6 +495,13 @@ def run_dynamic_ai_search(search_query: str, target_trip_context: Optional[Dict[
         "model": dyn.get("_model", "llama-3.3-70b-versatile"),
         "status": "Live AI",
     }
+    live_steps = [
+        {"order": 1, "tool": "geocode_destination", "tool_input": {"destination": dest}, "status": "Success", "observation": {"latitude": dyn["lat"], "longitude": dyn["lon"]}},
+        {"order": 2, "tool": "search_flights", "tool_input": {"source": src, "destination": dest}, "status": "Success", "observation": trip["flight"]},
+        {"order": 3, "tool": "search_hotels", "tool_input": {"city": dest, "days": days}, "status": "Success", "observation": trip["hotel"]},
+        {"order": 4, "tool": "discover_places", "tool_input": {"city": dest, "count": len(trip["places"])}, "status": "Success", "observation": [{"name": p.get("name"), "category": p.get("category"), "rating": p.get("rating")} for p in trip["places"]]},
+    ]
+    st.session_state.agent_steps = live_steps
 
     if isinstance(st.session_state.get("chat_history"), list):
         st.session_state.chat_history.append({"role": "user", "content": search_query})
@@ -694,6 +705,7 @@ if st.session_state.active_nav == "Overview":
         with up_left:
             render_arrival_schedule_card(trip)
         with up_right:
+            coords = tuple(trip["coords"]) if trip.get("coords") else coords
             render_map_card(dest_name, coords, trip.get("places", []))
 
         render_hotel_card(trip.get("hotel"), dest_name)

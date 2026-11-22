@@ -5,18 +5,81 @@ import requests
 from agent.travel_agent import _discover_keys
 
 
+KNOWN_CITY_COORDS = {
+    "darjeeling": (27.0410, 88.2663),
+    "kolkata": (22.5726, 88.3639),
+    "goa": (15.2993, 74.1240),
+    "delhi": (28.6139, 77.2090),
+    "new delhi": (28.6139, 77.2090),
+    "jaipur": (26.9124, 75.7873),
+    "mumbai": (19.0760, 72.8777),
+    "bangalore": (12.9716, 77.5946),
+    "bengaluru": (12.9716, 77.5946),
+    "hyderabad": (17.3850, 78.4867),
+    "chennai": (13.0827, 80.2707),
+    "manali": (32.2432, 77.1892),
+    "shimla": (31.1048, 77.1734),
+    "gangtok": (27.3389, 88.6065),
+    "leh": (34.1526, 77.5771),
+    "ladakh": (34.1526, 77.5771),
+    "srinagar": (34.0837, 74.7973),
+    "udaipur": (24.5854, 73.7125),
+    "varanasi": (25.3176, 82.9739),
+    "rishikesh": (30.0869, 78.2676),
+    "ooty": (11.4102, 76.6950),
+    "munnar": (10.0889, 77.0595),
+    "kochi": (9.9312, 76.2673),
+    "kerala": (9.9312, 76.2673),
+    "agra": (27.1767, 78.0081),
+    "amritsar": (31.6340, 74.8723),
+    "shillong": (25.5788, 91.8933),
+    "pondicherry": (11.9416, 79.8083),
+    "durgapur": (23.5204, 87.3119),
+    "pune": (18.5204, 73.8567),
+    "coorg": (12.3375, 75.8069),
+    "nainital": (29.3919, 79.4542),
+    "mussoorie": (30.4598, 78.0644),
+}
+
+HERO_THEMES = {
+    "mountain": "https://images.unsplash.com/photo-1544735716-392fe2489ffa?auto=format&fit=crop&w=1200&q=80",
+    "beach": "https://images.unsplash.com/photo-1512343879784-a960bf40e7f2?auto=format&fit=crop&w=1200&q=80",
+    "heritage": "https://images.unsplash.com/photo-1524492412937-b28074a5d7da?auto=format&fit=crop&w=1200&q=80",
+    "city": "https://images.unsplash.com/photo-1570168007204-dfb528c6958f?auto=format&fit=crop&w=1200&q=80",
+}
+
+
+def pick_hero_image(destination: str, summary: str = "") -> str:
+    txt = f"{destination} {summary}".lower()
+    if any(k in txt for k in ["darjeeling", "manali", "shimla", "gangtok", "leh", "ladakh", "srinagar", "ooty", "munnar", "shillong", "nainital", "mussoorie", "hill", "mountain", "himalaya", "tea", "snow"]):
+        return HERO_THEMES["mountain"]
+    if any(k in txt for k in ["goa", "beach", "island", "andaman", "pondicherry", "coastal", "kerala", "kochi", "gokarna", "varkala"]):
+        return HERO_THEMES["beach"]
+    if any(k in txt for k in ["kolkata", "jaipur", "udaipur", "delhi", "agra", "varanasi", "amritsar", "fort", "palace", "heritage", "temple"]):
+        return HERO_THEMES["heritage"]
+    return HERO_THEMES["city"]
+
+
 def geocode_city(city: str) -> Tuple[float, float]:
-    """Resolves real (lat, lon) for any searched city via free Open-Meteo Geocoding API."""
+    """Resolves accurate (lat, lon) using verified city table first, then Open-Meteo Geocoding."""
+    key = city.strip().lower()
+    if key in KNOWN_CITY_COORDS:
+        return KNOWN_CITY_COORDS[key]
+    for k, coords in KNOWN_CITY_COORDS.items():
+        if k in key:
+            return coords
     try:
         r = requests.get(
             "https://geocoding-api.open-meteo.com/v1/search",
-            params={"name": city.strip(), "count": 1, "language": "en", "format": "json"},
+            params={"name": city.strip(), "count": 5, "language": "en", "format": "json"},
             timeout=6,
         )
         if r.status_code == 200:
             results = r.json().get("results") or []
-            if results:
-                return float(results[0]["latitude"]), float(results[0]["longitude"])
+            in_matches = [x for x in results if str(x.get("country_code", "")).upper() == "IN"]
+            best = in_matches[0] if in_matches else (results[0] if results else None)
+            if best:
+                return float(best["latitude"]), float(best["longitude"])
     except Exception:
         pass
     return 22.5726, 88.3639
@@ -273,6 +336,7 @@ def generate_dynamic_trip(
         md_lines.append("")
 
     data["destination"] = dest
+    data["hero_image"] = pick_hero_image(dest, str(data.get("summary", "")))
     data["lat"] = lat
     data["lon"] = lon
     data["attractions"] = attractions
