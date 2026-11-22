@@ -24,96 +24,170 @@ def geocode_city(city: str) -> Tuple[float, float]:
 
 def _extract_json_block(text: str) -> Optional[Dict[str, Any]]:
     text = (text or "").strip()
-    text = re.sub(r"^```(?:json)?\s*", "", text)
+    if not text:
+        return None
+    text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.I)
     text = re.sub(r"\s*```$", "", text)
     try:
         return json.loads(text)
     except Exception:
         m = re.search(r"\{.*\}", text, flags=re.S)
         if m:
+            candidate = re.sub(r",\s*([}\]])", r"\1", m.group(0))
             try:
-                return json.loads(m.group(0))
+                return json.loads(candidate)
             except Exception:
                 return None
     return None
 
 
+def _discover_groq_models(api_key: str) -> List[str]:
+    """Fetches currently active chat models from the user's Groq account."""
+    preferred = [
+        "llama-3.3-70b-versatile",
+        "meta-llama/llama-4-scout-17b-16e-instruct",
+        "llama-3.1-8b-instant",
+        "openai/gpt-oss-20b",
+        "openai/gpt-oss-120b",
+    ]
+    blocked = ("whisper", "guard", "orpheus", "tts", "embed", "safeguard", "compound")
+    live_models: List[str] = []
+    try:
+        resp = requests.get(
+            "https://api.groq.com/openai/v1/models",
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=6,
+        )
+        if resp.status_code == 200:
+            for item in resp.json().get("data", []):
+                mid = str(item.get("id", "")).strip()
+                if mid and not any(b in mid.lower() for b in blocked):
+                    live_models.append(mid)
+    except Exception:
+        pass
+
+    if not live_models:
+        return preferred
+
+    ordered = [m for m in preferred if m in live_models]
+    for m in live_models:
+        if m not in ordered:
+            ordered.append(m)
+    return ordered[:6]
+
+
 def _call_llm_json(system_prompt: str, user_prompt: str) -> Tuple[Dict[str, Any], str, str]:
-    """Calls Groq -> OpenAI -> Gemini for structured JSON trip output."""
+    """Calls live Groq models -> Gemini (thinking disabled for clean JSON) -> OpenAI."""
     keys = _discover_keys()
     errors: List[str] = []
 
+    # 1. Groq (dynamically discovered active models)
     if keys.get("Groq"):
-        for model in ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]:
+        headers = {"Authorization": f"Bearer {keys['Groq']}", "Content-Type": "application/json"}
+        for model in _discover_groq_models(keys["Groq"]):
             try:
-                resp = requests.post(
-                    "https://api.groq.com/openai/v1/chat/completions",
-                    headers={"Authorization": f"Bearer {keys['Groq']}", "Content-Type": "application/json"},
-                    json={
-                        "model": model,
-                        "messages": [
-                            {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": user_prompt},
-                        ],
-                        "temperature": 0.3,
-                        "max_completion_tokens": 2200,
-                        "response_format": {"type": "json_object"},
-                    },
-                    timeout=18,
-                )
-                if resp.status_code == 200:
-                    parsed = _extract_json_block(resp.json()["choices"][0]["message"].get("content", ""))
-                    if parsed:
-                        return parsed, "Groq", model
-                errors.append(f"Groq/{model}: {resp.status_code}")
-            except Exception as e:
-                errors.append(f"Groq/{model}: {e}")
-
-    if keys.get("OpenAI"):
-        try:
-            resp = requests.post(
-                "https://api.openai.com/openai/v1/chat/completions",
-                headers={"Authorization": f"Bearer {keys['OpenAI']}", "Content-Type": "application/json"},
-                json={
-                    "model": "gpt-4o-mini",
+                payload: Dict[str, Any] = {
+                    "model": model,
                     "messages": [
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_prompt},
                     ],
-                    "temperature": 0.3,
-                    "max_tokens": 2200,
+                    "temperature": 0.25,
+                    "max_completion_tokens": 4096,
                     "response_format": {"type": "json_object"},
-                },
-                timeout=18,
-            )
-            if resp.status_code == 200:
-                parsed = _extract_json_block(resp.json()["choices"][0]["message"].get("content", ""))
-                if parsed:
-                    return parsed, "OpenAI", "gpt-4o-mini"
-            errors.append(f"OpenAI: {resp.status_code}")
-        except Exception as e:
-            errors.append(f"OpenAI: {e}")
+                }
+                if "gpt-oss" in model.lower():
+                    payload["reasoning_effort"] = "low"
 
+                resp = requests.post(
+                    "https://api.groq.com/openai/v1/chat/completions",
+                    headers=headers,
+                    json=payload,
+                    timeout=20,
+                )
+                # Retry without response_format if a specific model rejects json_object
+                if resp.status_code == 400 and "response_format" in payload:
+                    payload.pop("response_format", None)
+                    resp = requests.post(
+                        "https://api.groq.com/openai/v1/chat/completions",
+                        headers=headers,
+                        json=payload,
+                        timeout=20,
+                    )
+                if resp.status_code == 200:
+                    raw = resp.json()["choices"][0]["message"].get("content", "")
+                    parsed = _extract_json_block(raw)
+                    if parsed:
+                        return parsed, "Groq", model
+                    errors.append(f"Groq/{model}: invalid JSON ({len(raw)} chars)")
+                else:
+                    errors.append(f"Groq/{model}: {resp.status_code}")
+            except Exception as e:
+                errors.append(f"Groq/{model}: {e}")
+
+    # 2. Gemini (disable thinking budget so full 4096 tokens go to valid JSON)
     if keys.get("Gemini"):
-        try:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={keys['Gemini']}"
-            resp = requests.post(
-                url,
-                headers={"Content-Type": "application/json"},
-                json={
-                    "contents": [{"parts": [{"text": f"{system_prompt}\n\nUser request: {user_prompt}"}]}],
-                    "generationConfig": {"temperature": 0.3, "maxOutputTokens": 2200, "responseMimeType": "application/json"},
-                },
-                timeout=18,
-            )
-            if resp.status_code == 200:
-                txt = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
-                parsed = _extract_json_block(txt)
-                if parsed:
-                    return parsed, "Gemini", "gemini-2.5-flash"
-            errors.append(f"Gemini: {resp.status_code}")
-        except Exception as e:
-            errors.append(f"Gemini: {e}")
+        for g_model in ["gemini-2.5-flash", "gemini-2.0-flash"]:
+            try:
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{g_model}:generateContent?key={keys['Gemini']}"
+                gen_cfg: Dict[str, Any] = {
+                    "temperature": 0.25,
+                    "maxOutputTokens": 4096,
+                    "responseMimeType": "application/json",
+                }
+                if "2.5" in g_model:
+                    gen_cfg["thinkingConfig"] = {"thinkingBudget": 0}
+
+                resp = requests.post(
+                    url,
+                    headers={"Content-Type": "application/json"},
+                    json={
+                        "contents": [{"parts": [{"text": f"{system_prompt}\n\nUser request: {user_prompt}"}]}],
+                        "generationConfig": gen_cfg,
+                    },
+                    timeout=20,
+                )
+                if resp.status_code == 200:
+                    parts = resp.json()["candidates"][0]["content"].get("parts", [])
+                    txt = "".join(p.get("text", "") for p in parts if not p.get("thought"))
+                    parsed = _extract_json_block(txt)
+                    if parsed:
+                        return parsed, "Gemini", g_model
+                    errors.append(f"Gemini/{g_model}: invalid JSON ({len(txt)} chars)")
+                else:
+                    errors.append(f"Gemini/{g_model}: {resp.status_code}")
+            except Exception as e:
+                errors.append(f"Gemini/{g_model}: {e}")
+
+    # 3. OpenAI fallback
+    if keys.get("OpenAI"):
+        for o_model in ["gpt-4.1-mini", "gpt-4o-mini", "gpt-4o"]:
+            try:
+                resp = requests.post(
+                    "https://api.openai.com/openai/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {keys['OpenAI']}", "Content-Type": "application/json"},
+                    json={
+                        "model": o_model,
+                        "messages": [
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_prompt},
+                        ],
+                        "temperature": 0.25,
+                        "max_tokens": 4096,
+                        "response_format": {"type": "json_object"},
+                    },
+                    timeout=20,
+                )
+                if resp.status_code == 200:
+                    raw = resp.json()["choices"][0]["message"].get("content", "")
+                    parsed = _extract_json_block(raw)
+                    if parsed:
+                        return parsed, "OpenAI", o_model
+                    errors.append(f"OpenAI/{o_model}: invalid JSON")
+                else:
+                    errors.append(f"OpenAI/{o_model}: {resp.status_code}")
+            except Exception as e:
+                errors.append(f"OpenAI/{o_model}: {e}")
 
     raise RuntimeError(" | ".join(errors) or "No API key configured")
 
@@ -127,10 +201,10 @@ def generate_dynamic_trip(
 ) -> Dict[str, Any]:
     """Generates a real, destination-specific trip object for any search query."""
     system_prompt = (
-        "You are Voyage AI, a travel planning engine. Return ONLY valid JSON with real, famous, accurate landmarks, "
-        "hotels, restaurants, and day-by-day plans for the user's searched destination. "
+        "You are Voyage AI, a travel planning engine. Return ONLY a single valid JSON object (no markdown) "
+        "with real, famous, accurate landmarks, hotels, restaurants, and day-by-day plans for the searched destination. "
         "NEVER use generic placeholder names like 'Famous Fort', 'Historic Temple', 'Scenic Museum', or 'Popular Lake'. "
-        "JSON schema:\n"
+        "Required JSON schema:\n"
         "{\n"
         '  "title": "Short trip title",\n'
         '  "source": "Origin city",\n'
