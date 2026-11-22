@@ -1,3 +1,4 @@
+from agent.dynamic_planner import generate_dynamic_trip
 # app.py
 import os
 import json
@@ -349,7 +350,164 @@ def _sync_ai_recommendation_to_trip(trip: Dict[str, Any], ai_text: str) -> Dict[
     return trip
 
 
+def _update_budget_dict(target: Any, f_val: int, h_val: int, food_val: int, t_val: int, tot_val: int) -> Any:
+    if not isinstance(target, dict):
+        return target
+    out = dict(target)
+    for k, v in list(out.items()):
+        if isinstance(v, dict):
+            out[k] = _update_budget_dict(v, f_val, h_val, food_val, t_val, tot_val)
+            continue
+        if isinstance(v, (int, float)):
+            kl = k.lower()
+            if "flight" in kl:
+                out[k] = f_val
+            elif "hotel" in kl or "stay" in kl:
+                out[k] = h_val
+            elif "food" in kl or "dining" in kl:
+                out[k] = food_val
+            elif "transport" in kl or "local" in kl:
+                out[k] = t_val
+            elif "total" in kl:
+                out[k] = tot_val
+    return out
+
+
+def run_dynamic_ai_search(search_query: str, target_trip_context: Optional[Dict[str, Any]] = None) -> bool:
+    """Runs live AI structured planning for any searched city or modification prompt and updates ALL Overview cards."""
+    cur = dict(target_trip_context or st.session_state.get("current_trip") or {})
+    src_def = str(cur.get("source", "Delhi"))
+    days_def = int(cur.get("days", 4) or 4)
+    trav_def = int(cur.get("travelers", 2) or 2)
+
+    try:
+        dyn = generate_dynamic_trip(
+            search_query=search_query,
+            default_source=src_def,
+            default_days=days_def,
+            travelers=trav_def,
+        )
+    except Exception as exc:
+        st.session_state.last_error = {
+            "provider": "Dynamic AI Planner",
+            "category": "Search Generation Error",
+            "fallback_status": str(exc)[:200],
+            "raw_detail": str(exc),
+        }
+        return False
+
+    dest = dyn["destination"]
+    src = str(dyn.get("source") or src_def).strip().title()
+    days = max(1, int(dyn.get("days") or days_def))
+    travelers = max(1, int(dyn.get("travelers") or trav_def))
+
+    # Build base structure from existing schema so every UI card keeps expected keys
+    try:
+        trip = build_trip_from_datasets(src, dest, days, travelers=travelers)
+    except Exception:
+        trip = dict(cur)
+
+    trip["title"] = dyn.get("title") or f"{dest} Signature Trip 2026"
+    trip["source"] = src
+    trip["destination"] = dest
+    trip["days"] = days
+    trip["travelers"] = travelers
+    trip["summary"] = dyn.get("summary") or trip.get("summary", "")
+    trip["ai_insight"] = dyn.get("ai_insight") or dyn.get("summary", "")
+    trip["full_itinerary"] = dyn.get("full_itinerary", "")
+    trip["coords"] = (dyn["lat"], dyn["lon"])
+    trip["places"] = dyn.get("attractions") or []
+    trip["day_plans"] = dyn.get("day_plans") or []
+
+    # Populate flat schedule list from Day 1 for backwards compatibility
+    if trip["day_plans"]:
+        trip["schedule"] = [
+            {"activity": it.get("activity", ""), "time": it.get("time", "")}
+            for it in (trip["day_plans"][0].get("items") or [])[:4]
+        ]
+
+    # Update hotel cleanly preserving card keys
+    d_hotel = dyn.get("hotel") or {}
+    base_hotel = dict(trip.get("hotel") or {})
+    base_hotel.update({
+        "name": d_hotel.get("name", f"{dest} Grand Residency"),
+        "hotel_name": d_hotel.get("name", f"{dest} Grand Residency"),
+        "city": dest,
+        "location": d_hotel.get("area") or dest,
+        "price_per_night": int(d_hotel.get("price_per_night") or 4200),
+        "price": int(d_hotel.get("price_per_night") or 4200),
+        "stars": int(d_hotel.get("stars") or 4),
+        "rating": float(d_hotel.get("rating") or 4.5),
+    })
+    trip["hotel"] = base_hotel
+
+    # Update flight cleanly preserving card keys
+    d_fl = dyn.get("flight") or {}
+    base_fl = dict(trip.get("flight") or {})
+    base_fl.update({
+        "airline": d_fl.get("airline", "IndiGo"),
+        "flight_id": d_fl.get("flight_id", "6E-204"),
+        "price": int(d_fl.get("price") or 5200),
+        "duration": d_fl.get("duration", "2h 15m"),
+        "from": src,
+        "to": dest,
+        "source": src,
+        "destination": dest,
+    })
+    trip["flight"] = base_fl
+
+    # Update budget numbers preserving card keys
+    d_b = dyn.get("budget") or {}
+    f_val = int(d_b.get("flights") or (base_fl["price"] * travelers))
+    h_val = int(d_b.get("hotels") or (base_hotel["price_per_night"] * days))
+    food_val = int(d_b.get("food") or (1400 * days * travelers))
+    t_val = int(d_b.get("transport") or (900 * days))
+    tot_val = int(d_b.get("total") or (f_val + h_val + food_val + t_val))
+    if trip.get("budget"):
+        trip["budget"] = _update_budget_dict(trip["budget"], f_val, h_val, food_val, t_val, tot_val)
+    else:
+        trip["budget"] = {"flights": f_val, "hotels": h_val, "food": food_val, "transport": t_val, "total": tot_val}
+
+    # Sync global CITY_COORDS and refresh live 5-day Open-Meteo weather
+    if "CITY_COORDS" in globals() and isinstance(globals()["CITY_COORDS"], dict):
+        globals()["CITY_COORDS"][dest] = (dyn["lat"], dyn["lon"])
+    try:
+        fresh_w = fetch_open_meteo_forecast(dyn["lat"], dyn["lon"])
+        if isinstance(st.session_state.get("weather_cache"), dict):
+            st.session_state.weather_cache[dest] = fresh_w
+    except Exception:
+        pass
+
+    # Add destination-specific essentials to Packing Checklist
+    pack_items = dyn.get("packing_essentials") or []
+    if pack_items and isinstance(st.session_state.get("packing_state"), dict):
+        st.session_state.packing_state[f"{dest} Essentials"] = {str(x): False for x in pack_items[:4]}
+
+    st.session_state.current_trip = trip
+    st.session_state.last_quick_query = search_query
+    st.session_state.last_error = None
+    st.session_state.agent_meta = {
+        "provider": dyn.get("_provider", "Groq"),
+        "model": dyn.get("_model", "llama-3.3-70b-versatile"),
+        "status": "Live AI",
+    }
+
+    if isinstance(st.session_state.get("chat_history"), list):
+        st.session_state.chat_history.append({"role": "user", "content": search_query})
+        st.session_state.chat_history.append({
+            "role": "assistant",
+            "provider": f"{dyn.get('_provider', 'Groq')} ({dyn.get('_model', '')})",
+            "content": trip["summary"],
+        })
+    return True
+
+
 def execute_user_travel_query(query_text: str, target_trip_context: Optional[Dict[str, Any]] = None) -> None:
+    ctx_trip = target_trip_context or st.session_state.get('current_trip') or {}
+    ctx_dest = ctx_trip.get('destination', '')
+    enriched_q = query_text if (not ctx_dest or ctx_dest.lower() in query_text.lower()) else f'{query_text} (Current destination: {ctx_dest}, {ctx_trip.get("days", 4)} days)'
+    if run_dynamic_ai_search(enriched_q, target_trip_context=target_trip_context):
+        return
     """Calls generate_itinerary(user_query) with state preservation and tool step logging."""
     if not query_text.strip():
         return
@@ -461,13 +619,7 @@ with tb_col1:
         placeholder="🔍 Quick switch destination (Goa, Delhi, Jaipur, Mumbai, Bangalore)...",
         label_visibility="collapsed",
     )
-    if quick_filter and quick_filter.strip().title() in CITY_COORDINATES:
-        matched_city = quick_filter.strip().title()
-        if st.session_state.current_trip.get("destination") != matched_city:
-            st.session_state.current_trip = st.session_state.saved_plans.get(
-                f"{matched_city} Trip",
-                build_trip_from_datasets("Delhi", matched_city, days=4, travelers=2),
-            )
+    pass
 with tb_col2:
     meta = st.session_state.agent_meta
     st.markdown(
@@ -493,6 +645,12 @@ with tb_col4:
             use_container_width=True,
         )
 
+if quick_filter and quick_filter.strip() and quick_filter.strip().lower() != st.session_state.get("last_quick_query", "").lower():
+    with st.spinner(f"✨ Voyage AI is building a live trip for '{quick_filter.strip()}'..."):
+        run_dynamic_ai_search(quick_filter.strip())
+    st.session_state.active_nav = "Overview"
+    st.rerun()
+
 render_error_banner(st.session_state.last_error)
 
 
@@ -500,6 +658,9 @@ render_error_banner(st.session_state.last_error)
 # 6. PAGE ROUTER: OVERVIEW (DRIBBBLE 3-COLUMN BENTO DASHBOARD)
 # ---------------------------------------------------------------------------
 if st.session_state.active_nav == "Overview":
+    _ct = st.session_state.get("current_trip") or {}
+    if _ct.get("coords") and "CITY_COORDS" in globals():
+        globals()["CITY_COORDS"][_ct.get("destination", "")] = tuple(_ct["coords"])
     trip = st.session_state.current_trip
     dest_name = trip.get("destination", "Goa")
     coords = trip.get("coordinates") or CITY_COORDINATES.get(dest_name)

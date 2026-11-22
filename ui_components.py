@@ -526,41 +526,76 @@ def render_featured_trip_card(trip: Dict[str, Any]) -> None:
 
 
 def render_arrival_schedule_card(trip: Dict[str, Any]) -> None:
-    """Renders the Center-Upper Arrival & Daily Schedule Card."""
-    arrival_date = html.escape(str(trip.get("arrival_date", "21 Nov 2026")))
-    departure_date = html.escape(str(trip.get("departure_date", "25 Nov 2026")))
-    days = int(trip.get("days", 4))
-    schedule: List[Dict[str, str]] = trip.get("schedule", [])
+    """Interactive day-by-day schedule card with Day tabs and scrollable timeline."""
+    import html as _hl
+    days_count = max(1, int(trip.get("days", 3) or 3))
+    day_plans = trip.get("day_plans") or []
 
-    blocks_html = ""
-    styles = ["v-sched-purple", "v-sched-green", "v-sched-cyan"]
-    for idx, item in enumerate(schedule[:3]):
-        cls = styles[idx % len(styles)]
-        act_title = html.escape(str(item.get("activity", "Scheduled Activity")))
-        act_time = html.escape(str(item.get("time", "10:00 - 12:00")))
-        blocks_html += (
-            f'<div class="{cls}">'
-            f'<div style="font-size:11.5px; font-weight:600; color:#F5F5F5; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{act_title}</div>'
-            f'<div style="font-size:10.5px; color:#9298A4;">{act_time}</div>'
+    # Build multi-day fallback from existing schedule/places if preset trip has no day_plans yet
+    if not day_plans:
+        base_sched = trip.get("schedule") or []
+        places = trip.get("places") or []
+        hotel_name = (trip.get("hotel") or {}).get("name", "Local Hotel")
+        for d in range(1, days_count + 1):
+            items = []
+            if d == 1:
+                items.append({"time": "10:00 AM", "activity": f"Check-in: {hotel_name}", "category": "Stay", "note": "Freshen up & drop luggage"})
+                for s in base_sched[:2]:
+                    items.append({"time": s.get("time", "02:00 PM"), "activity": s.get("activity", "City Walk"), "category": "Sightseeing", "note": "Curated stop"})
+            else:
+                p_idx = (d - 2) % max(1, len(places))
+                p_name = places[p_idx].get("name", f"Explore {trip.get('destination', 'City')}") if places else f"Explore {trip.get('destination', 'City')}"
+                items.append({"time": "09:30 AM", "activity": f"Visit {p_name}", "category": "Sightseeing", "note": "Beat the midday crowd"})
+                items.append({"time": "01:30 PM", "activity": f"Local Cuisine Lunch in {trip.get('destination', 'City')}", "category": "Food", "note": "Try signature regional dishes"})
+                items.append({"time": "05:30 PM", "activity": "Evening Market & Sunset Walk", "category": "Leisure", "note": "Golden hour photos"})
+            day_plans.append({"day": d, "theme": f"Day {d} Highlights", "items": items})
+
+    _html(
+        f'<div class="bento-card" style="padding:12px 14px 6px 14px; margin-bottom:6px;">'
+        f'<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">'
+        f'<span style="font-size:12px; font-weight:700; color:#F5F5F5;">📅 Day-by-Day Schedule</span>'
+        f'<span style="font-size:10px; color:#60A5FA; background:#1E293B; padding:2px 8px; border-radius:999px;">{len(day_plans)} Days • Scrollable</span>'
+        f'</div>'
+        f'<div style="font-size:11px; color:#9CA3AF;">{_hl.escape(str(trip.get("dates", f"{days_count}-Day Plan")))}</div>'
+        f'</div>'
+    )
+
+    tab_labels = [f"Day {dp.get('day', i + 1)}" for i, dp in enumerate(day_plans)] + ["All"]
+    tabs = st.tabs(tab_labels)
+    cat_colors = {"Sightseeing": "#3B82F6", "Food": "#F59E0B", "Leisure": "#10B981", "Stay": "#8B5CF6", "Travel": "#EC4899"}
+
+    def _render_slot(item: Dict[str, Any]) -> None:
+        cat = str(item.get("category", "Sightseeing"))
+        accent = cat_colors.get(cat, "#38BDF8")
+        t_str = _hl.escape(str(item.get("time", "")))
+        act = _hl.escape(str(item.get("activity", "")))
+        note = _hl.escape(str(item.get("note", "")))
+        _html(
+            f'<div style="background:#171A23; border:1px solid #262A36; border-left:3px solid {accent}; '
+            f'border-radius:8px; padding:7px 10px; margin-bottom:6px;">'
+            f'<div style="display:flex; justify-content:space-between; align-items:center; gap:6px;">'
+            f'<span style="font-size:12px; font-weight:600; color:#F3F4F6;">{act}</span>'
+            f'<span style="font-size:10px; color:{accent}; white-space:nowrap;">{t_str}</span>'
+            f'</div>'
+            f'{f"<div style=\"font-size:10.5px; color:#9CA3AF; margin-top:2px;\">{note}</div>" if note else ""}'
             f'</div>'
         )
 
-    _html(
-        f"""
-        <div class="v-card" style="height:192px;">
-            <div style="display:flex; justify-content:space-between; align-items:center;">
-                <span style="font-size:11px; color:#9298A4;">Arrival & Schedule</span>
-                <span style="font-size:10.5px; color:#A78BFA; background:#20232B; padding:1px 7px; border-radius:999px; border:1px solid #30343D;">
-                    {days}D Plan
-                </span>
-            </div>
-            <div style="font-size:15px; font-weight:700; color:#F5F5F5; margin:3px 0 8px 0;">
-                {arrival_date} <span style="font-size:11px; font-weight:400; color:#9298A4;">→ {departure_date}</span>
-            </div>
-            {blocks_html}
-        </div>
-        """
-    )
+    for idx, dp in enumerate(day_plans):
+        with tabs[idx]:
+            with st.container(height=185, border=False):
+                theme = _hl.escape(str(dp.get("theme", f"Day {idx + 1}")))
+                _html(f'<div style="font-size:11px; font-weight:600; color:#93C5FD; margin-bottom:6px;">✨ {theme}</div>')
+                for it in (dp.get("items") or []):
+                    _render_slot(it)
+
+    with tabs[-1]:
+        with st.container(height=185, border=False):
+            for idx, dp in enumerate(day_plans):
+                theme = _hl.escape(str(dp.get("theme", f"Day {idx + 1}")))
+                _html(f'<div style="font-size:11px; font-weight:700; color:#60A5FA; margin:4px 0;">Day {dp.get("day", idx + 1)} — {theme}</div>')
+                for it in (dp.get("items") or []):
+                    _render_slot(it)
 
 
 def render_weather_card(weather_data: List[Dict[str, Any]], destination: str) -> bool:
@@ -744,50 +779,42 @@ def render_budget_card(budget: Dict[str, Any]) -> None:
 
 
 def render_attraction_cards(places: List[Dict[str, Any]]) -> None:
-    """Renders the Center-Lower attraction image cards with distinct category photos."""
+    """Scrollable real attractions gallery displaying all discovered destination landmarks."""
+    import html as _hl
+    places = places or []
+    _html(
+        f'<div style="display:flex; justify-content:space-between; align-items:center; margin:8px 0 6px 0;">'
+        f'<span style="font-size:13px; font-weight:700; color:#F5F5F5;">Top Discovered Attractions</span>'
+        f'<span style="font-size:11px; color:#9CA3AF;">{len(places)} Verified Places • Scrollable</span>'
+        f'</div>'
+    )
     if not places:
-        _html(
-            """
-            <div class="v-card" style="height:155px; display:flex; align-items:center; justify-content:center; color:#9298A4; font-size:12px;">
-                No points of interest found in dataset for this destination.
-            </div>
-            """
-        )
+        st.info("Search any destination above to discover top attractions.")
         return
 
-    cards_html = ""
-    for idx, p in enumerate(places[:3]):
-        name = html.escape(str(p.get("name", p.get("place_name", "Point of Interest"))))
-        cat = html.escape(str(p.get("category", p.get("type", "Attraction"))))
-        rating = html.escape(str(p.get("rating", "4.6")))
-        fallback_img = _pick_attraction_image(name, cat, idx)
-        img = html.escape(str(p.get("image_url") or fallback_img))
-        cards_html += (
-            f'<div class="v-attr-card">'
-            f'<img src="{img}" alt="{name}"/>'
-            f'<div class="v-attr-overlay">'
-            f'<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:2px;">'
-            f'<span style="font-size:9.5px; background:rgba(8,9,11,0.75); color:#35BDF4; padding:1px 6px; border-radius:999px;">{cat}</span>'
-            f'<span style="font-size:10px; color:#FBBF24; font-weight:600;">★ {rating}</span>'
-            f'</div>'
-            f'<div style="font-size:12px; font-weight:700; color:#F5F5F5; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{name}</div>'
-            f'</div>'
-            f'</div>'
-        )
-
-    _html(
-        f"""
-        <div class="v-card">
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-                <span style="font-size:12px; font-weight:600; color:#F5F5F5;">Top Discovered Attractions</span>
-                <span style="font-size:10.5px; color:#9298A4;">Places Discovery Tool</span>
-            </div>
-            <div class="v-attractions-row">
-                {cards_html}
-            </div>
-        </div>
-        """
-    )
+    with st.container(height=230, border=False):
+        for row_start in range(0, len(places), 3):
+            row_items = places[row_start : row_start + 3]
+            cols = st.columns(3, gap="small")
+            for c_idx, place in enumerate(row_items):
+                g_idx = row_start + c_idx
+                name = str(place.get("name", "Landmark"))
+                cat = str(place.get("category", place.get("type", "Landmark")))
+                rating = place.get("rating", 4.5)
+                desc = str(place.get("description", ""))
+                img_url = _pick_attraction_image(name, cat, g_idx)
+                with cols[c_idx]:
+                    _html(
+                        f'<div style="background:#161922; border:1px solid #262A36; border-radius:12px; overflow:hidden; margin-bottom:8px;">'
+                        f'<div style="position:relative; height:98px; background:url('{img_url}') center/cover no-repeat;">'
+                        f'<div style="position:absolute; inset:0; background:linear-gradient(to top, rgba(15,17,23,0.92) 8%, rgba(15,17,23,0.12) 70%);"></div>'
+                        f'<span style="position:absolute; top:6px; left:6px; font-size:9.5px; font-weight:600; color:#E5E7EB; background:rgba(15,17,23,0.78); padding:2px 7px; border-radius:999px;">{_hl.escape(cat)}</span>'
+                        f'<span style="position:absolute; top:6px; right:6px; font-size:10px; font-weight:700; color:#FBBF24; background:rgba(15,17,23,0.78); padding:2px 6px; border-radius:999px;">★ {rating}</span>'
+                        f'<div style="position:absolute; bottom:6px; left:8px; right:8px; font-size:12px; font-weight:700; color:#FFFFFF; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{_hl.escape(name)}</div>'
+                        f'</div>'
+                        f'{f"<div style=\"padding:6px 8px; font-size:10.5px; color:#9CA3AF; line-height:1.3; min-height:34px;\">{_hl.escape(desc[:72])}</div>" if desc else ""}'
+                        f'</div>'
+                    )
 
 
 def render_packing_checklist(packing_state: Dict[str, Dict[str, bool]]) -> None:
